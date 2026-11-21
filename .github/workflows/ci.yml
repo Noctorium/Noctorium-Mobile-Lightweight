@@ -1,0 +1,27 @@
+name: CI
+
+# Builds the release APK on every push, as the release does, and says how big it came out: the size is the point.
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build
+        run: ./gradlew --no-daemon liteApk
+      - name: Size
+        run: ls -l build/dist/ && echo "### $(ls build/dist) — $(du -k build/dist/*.apk | cut -f1) KB" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noctorium-lite
+          path: build/dist/*.apk
