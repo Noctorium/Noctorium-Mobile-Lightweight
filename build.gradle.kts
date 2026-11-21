@@ -3,7 +3,7 @@
  * AndroidX, no Compose, no Media3, no image loader. Android's own views, MediaPlayer, media session and JSON
  * do the work, and R8 strips what is left, so the APK stays well under a megabyte and runs on Android 5.
  *
- * The music comes from the hosted web player's API (noctorium-music.vercel.app/api/music), which already
+ * The music comes from the hosted web player's API (music.noctorium.xyz/api/music), which already
  * reads YouTube Music and SoundCloud; only a YouTube song's audio address is asked for on the phone, because
  * YouTube gives it out for the device that asks.
  */

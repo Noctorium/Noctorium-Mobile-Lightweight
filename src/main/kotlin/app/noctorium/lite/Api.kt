@@ -62,7 +62,7 @@ class Opened(val track: Track?, val playlistKey: String?)
  * small JSON lists. Everything here blocks: call it off the main thread.
  */
 object Api {
-    private const val BASE = "https://noctorium-music.vercel.app/api/music"
+    private const val BASE = "https://music.noctorium.xyz/api/music"
 
     private fun get(query: String): JSONObject {
         val reply = Http.text("$BASE?$query&hl=en&gl=US")

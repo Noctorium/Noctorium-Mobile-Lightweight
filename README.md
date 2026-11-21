@@ -16,7 +16,7 @@ No library but Kotlin's own: no AndroidX, no Compose, no ExoPlayer, no image loa
 views drawn in code, the audio is Android's own `MediaPlayer`, the notification and lock screen are its own media
 session, and R8 strips the rest.
 
-The music comes from the hosted web player's API (`noctorium-music.vercel.app/api/music`), which already reads
+The music comes from the hosted web player's API (`music.noctorium.xyz/api/music`), which already reads
 YouTube Music and SoundCloud. A YouTube song's audio is asked for on the phone itself, the way yt-dlp asks — YouTube
 hands its addresses to the device that asks. A SoundCloud track that comes only as a stream Android's player cannot
 read, or is locked to SoundCloud's app, plays as the same recording on YouTube Music, as the full Noctorium does.
