@@ -91,9 +91,12 @@ kotlin {
 }
 
 /** The APK as the release names it: Noctorium-Lite-<version>.apk. */
+val liteApkName = "Noctorium-Lite-$appVersion.apk"
 tasks.register<Copy>("liteApk") {
     dependsOn("assembleRelease")
     from(layout.buildDirectory.dir("outputs/apk/release")) { include("*.apk") }
     into(layout.buildDirectory.dir("dist"))
-    rename { "Noctorium-Lite-$appVersion.apk" }
+    // A plain string, not the script's own value: the configuration cache keeps no reference to the script.
+    val name = liteApkName
+    rename { name }
 }
