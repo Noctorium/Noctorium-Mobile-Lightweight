@@ -13,6 +13,9 @@ import java.util.Locale
 import java.util.TimeZone
 import java.util.UUID
 
+/** Last.fm's rule, which ListenBrainz follows: songs over half a minute, once half or four minutes are heard. */
+fun scrobbleCounts(heardMs: Long, durationMs: Long): Boolean = durationMs > 30_000 && heardMs >= minOf(durationMs / 2, 240_000)
+
 /** Whether a listen counts, as every Noctorium counts it: half a minute, or half the song if it is shorter. */
 fun listenCounts(heardMs: Long, durationMs: Long): Boolean = heardMs >= (if (durationMs > 0) minOf(durationMs / 2, 30_000) else 30_000)
 
@@ -133,6 +136,7 @@ object Account : Player.Listener {
     private var playingSince = 0L
     private var startedAt = 0L
     private var counted = false
+    private var scrobbled = false
     private var reported = ""
 
     override fun changed() {
@@ -142,10 +146,12 @@ object Account : Player.Listener {
         val track = Player.current
         if (track?.key != heardTrack?.key) {
             countIfDue()
-            heardTrack = track; heardMs = 0; counted = false; startedAt = System.currentTimeMillis()
+            scrobbleIfDue()
+            heardTrack = track; heardMs = 0; counted = false; scrobbled = false; startedAt = System.currentTimeMillis()
         }
         if (Player.playing) playingSince = now
         countIfDue()
+        scrobbleIfDue()
         nowPlaying()
     }
 
@@ -163,6 +169,18 @@ object Account : Player.Listener {
         Thread { if ((call("/api/plays", body)?.first ?: 0) in 200..299) refresh() }.start()
     }
 
+    /** A listen that meets Last.fm's rule, scrobbled by the service to the Last.fm and ListenBrainz linked to the account. */
+    private fun scrobbleIfDue() {
+        val track = heardTrack ?: return
+        val duration = track.durationMs.takeIf { it > 0 } ?: Player.durationMs.toLong()
+        if (scrobbled || !signedIn || !scrobbleCounts(heardMs, duration)) return
+        scrobbled = true
+        val body = JSONObject()
+            .put("track", JSONObject().put("title", track.title).put("artist", track.artist).put("url", track.sourceUrl).put("durationMs", duration))
+            .put("startedAt", startedAt / 1000).put("heardMs", heardMs).toString()
+        Thread { call("/api/scrobble", body) }.start()
+    }
+
     /** java.time is Android 8 and later; Lite runs from Android 5. */
     private fun iso(millis: Long): String =
         SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date(millis))
@@ -171,7 +189,8 @@ object Account : Player.Listener {
         override fun run() {
             val track = Player.current?.takeIf { Player.playing }
             reported = track?.key.orEmpty()
-            val body = JSONObject().put("track", track?.let {
+            // relay: the service also says it as "now playing" on the Last.fm and ListenBrainz linked to the account.
+            val body = JSONObject().put("relay", true).put("track", track?.let {
                 JSONObject().put("title", it.title).put("artist", it.artist).put("artworkUrl", it.artworkUrl).put("url", it.sourceUrl)
                     .put("provider", it.provider).put("durationMs", Player.durationMs.toLong()).put("positionMs", Player.positionMs.toLong())
             } ?: JSONObject.NULL).toString()

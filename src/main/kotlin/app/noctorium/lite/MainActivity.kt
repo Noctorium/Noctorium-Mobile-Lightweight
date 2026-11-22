@@ -364,7 +364,7 @@ class MainActivity : Activity(), Player.Listener, Account.Watcher {
             }
             else -> {
                 card.addView(line("Noctorium account", 16, TEXT, bold = true))
-                card.addView(line(Account.message ?: "Sign in with Discord, Telegram or email to count your listening and show what you play on Discord and Telegram.", 14, MUTED))
+                card.addView(line(Account.message ?: "Sign in with Discord, Telegram or email to count your listening, show what you play on Discord and Telegram, and scrobble to the Last.fm and ListenBrainz linked to your account.", 14, MUTED))
                 add(button("Sign in", true) { Account.signIn(open) })
             }
         }
