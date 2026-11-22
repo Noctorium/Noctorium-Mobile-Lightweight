@@ -36,6 +36,7 @@ class PlayerService : Service(), Player.Listener {
     override fun onCreate() {
         super.onCreate()
         Player.init(this)
+        Account.init(this)
         session = MediaSession(this, "Noctorium Lite").apply {
             setCallback(object : MediaSession.Callback() {
                 override fun onPlay() = Player.toggle()

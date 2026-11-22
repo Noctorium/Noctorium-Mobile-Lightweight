@@ -118,7 +118,8 @@ object Api {
 
 /** The one HTTP helper: Android's own HttpURLConnection, with timeouts. */
 object Http {
-    fun text(url: String, body: String? = null, headers: Map<String, String> = emptyMap()): String {
+    /** One request: its status and its body, error or not. */
+    private fun exchange(url: String, body: String?, headers: Map<String, String>): Pair<Int, String> {
         val connection = URL(url).openConnection() as HttpURLConnection
         try {
             connection.connectTimeout = 10_000
@@ -132,12 +133,22 @@ object Http {
             }
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-            if (code !in 200..299 && !text.trimStart().startsWith("{")) throw IOException("The service answered $code")
-            return text
+            return code to stream?.bufferedReader()?.use { it.readText() }.orEmpty()
         } finally {
             connection.disconnect()
         }
+    }
+
+    fun text(url: String, body: String? = null, headers: Map<String, String> = emptyMap()): String {
+        val (code, text) = exchange(url, body, headers)
+        if (code !in 200..299 && !text.trimStart().startsWith("{")) throw IOException("The service answered $code")
+        return text
+    }
+
+    /** A call whose status matters: the status, and the JSON answer (empty when there was none). */
+    fun status(url: String, body: String? = null, headers: Map<String, String> = emptyMap()): Pair<Int, JSONObject> {
+        val (code, text) = exchange(url, body, headers)
+        return code to (runCatching { JSONObject(text) }.getOrNull() ?: JSONObject())
     }
 }
 

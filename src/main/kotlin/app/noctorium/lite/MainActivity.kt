@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
@@ -45,7 +46,7 @@ private const val ACCENT = 0xFFB47CFF.toInt()
  * Every screen of Noctorium Lite, drawn in code from Android's own views: Home, Search, Library, a playlist, and
  * Now playing over them, with the mini player and the three tabs along the bottom.
  */
-class MainActivity : Activity(), Player.Listener {
+class MainActivity : Activity(), Player.Listener, Account.Watcher {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var content: FrameLayout
     private lateinit var mini: LinearLayout
@@ -55,6 +56,7 @@ class MainActivity : Activity(), Player.Listener {
     private lateinit var miniPlay: ImageButton
     private lateinit var miniProgress: ProgressBar
     private val tabs = mutableListOf<TextView>()
+    private var tab = 0
 
     /** The screens opened on top of a tab, for Back. */
     private val stack = mutableListOf<View>()
@@ -65,6 +67,7 @@ class MainActivity : Activity(), Player.Listener {
         super.onCreate(savedInstanceState)
         Player.init(this)
         Store.init(this)
+        Account.init(this)
         window.statusBarColor = BG
         window.navigationBarColor = CARD
 
@@ -94,8 +97,11 @@ class MainActivity : Activity(), Player.Listener {
         handleShare(intent)
     }
 
-    override fun onStart() { super.onStart(); Player.listen(this); changed(); tick() }
-    override fun onStop() { Player.forget(this); main.removeCallbacksAndMessages(null); super.onStop() }
+    override fun onStart() { super.onStart(); Player.listen(this); Account.watch(this); changed(); tick() }
+    override fun onStop() { Player.forget(this); Account.forget(this); main.removeCallbacksAndMessages(null); super.onStop() }
+
+    /** The account card is on Library: drawn again when signing in moves on, unless a playlist is open over it. */
+    override fun accountChanged() { if (tab == 2 && stack.isEmpty() && nowPlaying == null) selectTab(2) }
 
     override fun changed() {
         val track = Player.current
@@ -174,6 +180,7 @@ class MainActivity : Activity(), Player.Listener {
         closeNowPlaying()
         stack.clear()
         content.removeAllViews()
+        tab = i
         tabs.forEachIndexed { j, t -> t.setTextColor(if (i == j) ACCENT else MUTED) }
         content.addView(
             when (i) {
@@ -305,6 +312,7 @@ class MainActivity : Activity(), Player.Listener {
     private fun libraryScreen(): View {
         val column = column()
         column.addView(heading("Library"))
+        column.addView(accountCard())
         val liked = Store.liked
         column.addView(subheading("Liked songs · ${liked.size}"))
         if (liked.isEmpty()) column.addView(text("Long-press a song and choose Like to keep it here.", 14, MUTED).apply { setPadding(dp(16), 0, dp(16), dp(12)) })
@@ -318,6 +326,53 @@ class MainActivity : Activity(), Player.Listener {
             recent.forEachIndexed { i, t -> column.addView(trackRow(t) { Player.play(recent, i) }) }
         }
         return scroll(column)
+    }
+
+    /**
+     * The Noctorium account: sign in with a code on the service's page -- Discord, Telegram, GitHub or email -- and
+     * what plays here is counted, and shown as your Discord status and Telegram bio.
+     */
+    private fun accountCard(): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(CARD, 14)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+        }
+        fun line(value: String, sp: Int, color: Int, bold: Boolean = false) =
+            text(value, sp, color, bold).apply { maxLines = 4; setPadding(0, 0, 0, dp(6)) }
+        fun button(label: String, filled: Boolean, onClick: () -> Unit) = text(label, 14, if (filled) BG else TEXT, bold = true).apply {
+            setPadding(dp(16), dp(9), dp(16), dp(9))
+            background = rounded(if (filled) ACCENT else BG, 18)
+            setOnClickListener { onClick() }
+        }
+        val buttons = LinearLayout(this).apply { setPadding(0, dp(4), 0, 0) }
+        fun add(b: View) = buttons.addView(b, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(8) })
+        val open = { link: String -> runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link))) }.onFailure { toast("No browser to open the page in") }; Unit }
+        val code = Account.code
+        when {
+            Account.signedIn -> {
+                card.addView(line("Noctorium account", 16, TEXT, bold = true))
+                card.addView(line("Signed in as ${Account.name} · ${Account.streams} listens", 14, MUTED))
+                add(button("Sign out", false) { Account.signOut() })
+            }
+            code != null -> {
+                card.addView(line("Allow Noctorium Lite in your browser. Check it shows this code:", 14, MUTED))
+                card.addView(line(code, 26, TEXT, bold = true).apply { letterSpacing = 0.1f })
+                card.addView(line("Waiting for you to allow it…", 13, MUTED))
+                add(button("Open page", true) { Account.url?.let(open) })
+                add(button("Cancel", false) { Account.cancel() })
+            }
+            else -> {
+                card.addView(line("Noctorium account", 16, TEXT, bold = true))
+                card.addView(line(Account.message ?: "Sign in with Discord, Telegram, GitHub or email to count your listening and show what you play on Discord and Telegram.", 14, MUTED))
+                add(button("Sign in", true) { Account.signIn(open) })
+            }
+        }
+        card.addView(buttons)
+        return FrameLayout(this).apply {
+            setPadding(dp(16), dp(4), dp(16), dp(8))
+            addView(card)
+        }
     }
 
     // --- A playlist ---
