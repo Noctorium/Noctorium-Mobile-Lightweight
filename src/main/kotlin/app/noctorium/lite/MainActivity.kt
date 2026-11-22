@@ -329,7 +329,7 @@ class MainActivity : Activity(), Player.Listener, Account.Watcher {
     }
 
     /**
-     * The Noctorium account: sign in with a code on the service's page -- Discord, Telegram, GitHub or email -- and
+     * The Noctorium account: sign in with a code on the service's page -- Discord, Telegram or email -- and
      * what plays here is counted, and shown as your Discord status and Telegram bio.
      */
     private fun accountCard(): View {
@@ -364,7 +364,7 @@ class MainActivity : Activity(), Player.Listener, Account.Watcher {
             }
             else -> {
                 card.addView(line("Noctorium account", 16, TEXT, bold = true))
-                card.addView(line(Account.message ?: "Sign in with Discord, Telegram, GitHub or email to count your listening and show what you play on Discord and Telegram.", 14, MUTED))
+                card.addView(line(Account.message ?: "Sign in with Discord, Telegram or email to count your listening and show what you play on Discord and Telegram.", 14, MUTED))
                 add(button("Sign in", true) { Account.signIn(open) })
             }
         }

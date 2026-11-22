@@ -17,7 +17,7 @@ import java.util.UUID
 fun listenCounts(heardMs: Long, durationMs: Long): Boolean = heardMs >= (if (durationMs > 0) minOf(durationMs / 2, 30_000) else 30_000)
 
 /**
- * The Noctorium account: signed in from the browser with a code -- Discord, Telegram, GitHub or email, on the account
+ * The Noctorium account: signed in from the browser with a code -- Discord, Telegram or email, on the account
  * service's own page -- as every Noctorium signs in. Once signed in, what is played here is counted, and what is
  * playing is said, for the listener's Discord status and Telegram bio.
  */
