@@ -27,7 +27,11 @@ fun listenCounts(heardMs: Long, durationMs: Long): Boolean = heardMs >= (if (dur
 object Account : Player.Listener {
     interface Watcher { fun accountChanged() }
 
-    private const val SERVICE = "https://service.noctorium.xyz"
+    // Signing in and the account, and listening: two servers since 0.39, chosen by the path asked.
+    private const val ACCOUNT = "https://account.noctorium.xyz"
+    private const val STATS = "https://stats.noctorium.xyz"
+    private fun serverFor(path: String) =
+        if (listOf("/api/stats", "/api/plays", "/api/now-playing", "/api/scrobble").any { path == it || path.startsWith("$it?") }) STATS else ACCOUNT
     private const val SETTLE_MS = 3_000L
     private const val RENEW_MS = 5 * 60_000L
 
@@ -59,7 +63,7 @@ object Account : Player.Listener {
     private fun call(path: String, body: String? = null): Pair<Int, JSONObject>? = runCatching {
         val headers = mutableMapOf("Accept" to "application/json")
         token?.let { headers["Authorization"] = "Bearer $it" }
-        Http.status("$SERVICE$path", body, headers)
+        Http.status("${serverFor(path)}$path", body, headers)
     }.getOrNull()
 
     private fun refresh() = Thread {
@@ -121,7 +125,7 @@ object Account : Player.Listener {
     fun signOut(why: String? = null) {
         val had = token
         cancel()
-        if (had != null) Thread { runCatching { Http.status("$SERVICE/api/now-playing", """{"track":null}""", mapOf("Authorization" to "Bearer $had")) } }.start()
+        if (had != null) Thread { runCatching { Http.status("$STATS/api/now-playing", """{"track":null}""", mapOf("Authorization" to "Bearer $had")) } }.start()
         prefs.edit().remove("token").remove("name").apply()
         streams = 0
         message = why
