@@ -119,7 +119,7 @@ object Api {
 /** The one HTTP helper: Android's own HttpURLConnection, with timeouts. */
 object Http {
     /** One request: its status and its body, error or not. */
-    private fun exchange(url: String, body: String?, headers: Map<String, String>): Pair<Int, String> {
+    private fun exchange(url: String, body: ByteArray?, headers: Map<String, String>): Pair<Int, String> {
         val connection = URL(url).openConnection() as HttpURLConnection
         try {
             connection.connectTimeout = 10_000
@@ -128,8 +128,8 @@ object Http {
             if (body != null) {
                 connection.requestMethod = "POST"
                 connection.doOutput = true
-                connection.setRequestProperty("Content-Type", "application/json")
-                connection.outputStream.use { it.write(body.toByteArray()) }
+                if ("Content-Type" !in headers) connection.setRequestProperty("Content-Type", "application/json")
+                connection.outputStream.use { it.write(body) }
             }
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
@@ -140,13 +140,16 @@ object Http {
     }
 
     fun text(url: String, body: String? = null, headers: Map<String, String> = emptyMap()): String {
-        val (code, text) = exchange(url, body, headers)
+        val (code, text) = exchange(url, body?.toByteArray(), headers)
         if (code !in 200..299 && !text.trimStart().startsWith("{")) throw IOException("The service answered $code")
         return text
     }
 
     /** A call whose status matters: the status, and the JSON answer (empty when there was none). */
-    fun status(url: String, body: String? = null, headers: Map<String, String> = emptyMap()): Pair<Int, JSONObject> {
+    fun status(url: String, body: String? = null, headers: Map<String, String> = emptyMap()) = send(url, body?.toByteArray(), headers)
+
+    /** [status] with any body, such as a picture: JSON unless [headers] say otherwise. */
+    fun send(url: String, body: ByteArray?, headers: Map<String, String>): Pair<Int, JSONObject> {
         val (code, text) = exchange(url, body, headers)
         return code to (runCatching { JSONObject(text) }.getOrNull() ?: JSONObject())
     }

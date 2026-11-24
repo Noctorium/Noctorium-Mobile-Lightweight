@@ -42,6 +42,14 @@ object Account : Player.Listener {
     val signedIn: Boolean get() = token != null
     val name: String get() = prefs.getString("name", null).orEmpty()
     private val token: String? get() = prefs.getString("token", null)
+    val avatarUrl: String? get() = prefs.getString("avatar", null)
+    var email = ""; private set
+    // What the account screen asks for and offers: proofs for a change, and the pictures it can take.
+    var hasPassword = false; private set
+    var totp = false; private set
+    var telegramCodes = false; private set
+    var discordLinked = false; private set
+    var telegramLinked = false; private set
     var streams = 0; private set
     var code: String? = null; private set
     var url: String? = null; private set
@@ -60,10 +68,11 @@ object Account : Player.Listener {
     private fun tell() = main.post { watchers.toList().forEach { it.accountChanged() } }
 
     /** One call to the service: its status and what it said, or null when it could not be reached. */
-    private fun call(path: String, body: String? = null): Pair<Int, JSONObject>? = runCatching {
+    private fun call(path: String, body: String? = null, jpeg: ByteArray? = null): Pair<Int, JSONObject>? = runCatching {
         val headers = mutableMapOf("Accept" to "application/json")
         token?.let { headers["Authorization"] = "Bearer $it" }
-        Http.status("${serverFor(path)}$path", body, headers)
+        if (jpeg != null) headers["Content-Type"] = "image/jpeg"
+        Http.send("${serverFor(path)}$path", jpeg ?: body?.toByteArray(), headers)
     }.getOrNull()
 
     private fun refresh() = Thread {
@@ -71,6 +80,16 @@ object Account : Player.Listener {
         if (me?.first == 401) {
             main.post { signOut("Your Noctorium sign-in ran out. Sign in again.") }
             return@Thread
+        }
+        me?.takeIf { it.first in 200..299 }?.second?.optJSONObject("user")?.let { user ->
+            prefs.edit().putString("name", user.optString("displayName"))
+                .putString("avatar", if (user.isNull("avatarUrl")) null else user.optString("avatarUrl")).apply()
+            email = user.optString("email")
+            hasPassword = user.optBoolean("hasPassword")
+            totp = user.optJSONObject("twoStep")?.optBoolean("totp") == true
+            telegramCodes = user.optJSONObject("twoStep")?.optBoolean("telegram") == true
+            discordLinked = user.optJSONObject("linked")?.optBoolean("discord") == true
+            telegramLinked = user.optJSONObject("linked")?.optBoolean("telegram") == true
         }
         call("/api/stats?range=all")?.takeIf { it.first in 200..299 }?.let { streams = it.second.optInt("streams") }
         tell()
@@ -126,12 +145,45 @@ object Account : Player.Listener {
         val had = token
         cancel()
         if (had != null) Thread { runCatching { Http.status("$STATS/api/now-playing", """{"track":null}""", mapOf("Authorization" to "Bearer $had")) } }.start()
-        prefs.edit().remove("token").remove("name").apply()
-        streams = 0
+        prefs.edit().remove("token").remove("name").remove("avatar").apply()
+        streams = 0; email = ""
+        hasPassword = false; totp = false; telegramCodes = false; discordLinked = false; telegramLinked = false
         message = why
         reported = ""
         tell()
     }
+
+    // --- Changing the account, as its page on the service does ---
+
+    /**
+     * One change of the profile -- `name`, `email`, `password`, `delete`, `avatar-discord`, `avatar-telegram` or
+     * `avatar-remove` -- with its [fields]; [done] gets what went wrong, or null.
+     */
+    fun change(action: String, fields: Map<String, String> = emptyMap(), done: (String?) -> Unit) {
+        val body = JSONObject().put("action", action)
+        fields.forEach { (k, v) -> body.put(k, v) }
+        send({ call("/api/account/profile", body.toString()) }, done) { said ->
+            // A new email or password signs every other device out; this one is handed a fresh token to stay in.
+            said.optString("token").takeIf { it.isNotEmpty() }?.let { prefs.edit().putString("token", it).apply() }
+            if (action == "delete") main.post { signOut("Your Noctorium account is deleted.") } else refresh()
+        }
+    }
+
+    /** A new picture: a small square JPEG. */
+    fun upload(jpeg: ByteArray, done: (String?) -> Unit) = send({ call("/api/account/avatar", jpeg = jpeg) }, done) { refresh() }
+
+    /** Asks the Telegram bot for a two-step code. */
+    fun telegramCode(done: (String?) -> Unit) = send({ call("/api/account/security", """{"action":"telegram-send"}""") }, done) {}
+
+    private fun send(request: () -> Pair<Int, JSONObject>?, done: (String?) -> Unit, then: (JSONObject) -> Unit) = Thread {
+        val answer = request()
+        val error = when {
+            answer == null -> "The Noctorium service could not be reached. Try again."
+            answer.first in 200..299 -> { then(answer.second); null }
+            else -> answer.second.optString("error").ifEmpty { "That did not go through (${answer.first})." }
+        }
+        main.post { done(error) }
+    }.start()
 
     // --- What is played: counted once it counts, and said while it plays ---
 

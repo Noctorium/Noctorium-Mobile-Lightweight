@@ -7,6 +7,8 @@ import android.content.Intent
 import android.net.Uri
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -14,6 +16,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.InputType
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.KeyEvent
@@ -35,12 +38,16 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import java.io.ByteArrayOutputStream
+import java.io.IOException
 
 private const val BG = 0xFF0B0A10.toInt()
 private const val CARD = 0xFF17151F.toInt()
 private const val TEXT = 0xFFF2EEFF.toInt()
 private const val MUTED = 0xFFA39DB5.toInt()
 private const val ACCENT = 0xFFB47CFF.toInt()
+private const val ERROR = 0xFFFF8A80.toInt()
+private const val PICK_PICTURE = 7
 
 /**
  * Every screen of Noctorium Lite, drawn in code from Android's own views: Home, Search, Library, a playlist, and
@@ -62,6 +69,8 @@ class MainActivity : Activity(), Player.Listener, Account.Watcher {
     private val stack = mutableListOf<View>()
     private var nowPlaying: NowPlaying? = null
     private var searchState = SearchScreenState()
+    private var homeAvatar: FrameLayout? = null
+    private var account: AccountScreen? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -101,7 +110,11 @@ class MainActivity : Activity(), Player.Listener, Account.Watcher {
     override fun onStop() { Player.forget(this); Account.forget(this); main.removeCallbacksAndMessages(null); super.onStop() }
 
     /** The account card is on Library: drawn again when signing in moves on, unless a playlist is open over it. */
-    override fun accountChanged() { if (tab == 2 && stack.isEmpty() && nowPlaying == null) selectTab(2) }
+    override fun accountChanged() {
+        homeAvatar?.let { fillAvatar(it) }
+        account?.takeIf { it.view.parent != null }?.refresh()
+        if (tab == 2 && stack.isEmpty() && nowPlaying == null) selectTab(2)
+    }
 
     override fun changed() {
         val track = Player.current
@@ -203,7 +216,11 @@ class MainActivity : Activity(), Player.Listener, Account.Watcher {
 
     private fun homeScreen(): View {
         val column = column()
-        column.addView(heading("Noctorium"))
+        val top = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), dp(16), 0, dp(4)) }
+        homeAvatar = avatar(40).apply { contentDescription = "Noctorium account"; setOnClickListener { openAccount() } }
+        top.addView(homeAvatar, LinearLayout.LayoutParams(dp(40), dp(40)))
+        top.addView(heading("Noctorium").apply { setPadding(dp(12), 0, dp(16), 0) }, LinearLayout.LayoutParams(0, -2, 1f))
+        column.addView(top)
         val recent = Store.recent
         if (recent.isNotEmpty()) {
             column.addView(subheading("Played lately"))
@@ -340,11 +357,7 @@ class MainActivity : Activity(), Player.Listener, Account.Watcher {
         }
         fun line(value: String, sp: Int, color: Int, bold: Boolean = false) =
             text(value, sp, color, bold).apply { maxLines = 4; setPadding(0, 0, 0, dp(6)) }
-        fun button(label: String, filled: Boolean, onClick: () -> Unit) = text(label, 14, if (filled) BG else TEXT, bold = true).apply {
-            setPadding(dp(16), dp(9), dp(16), dp(9))
-            background = rounded(if (filled) ACCENT else BG, 18)
-            setOnClickListener { onClick() }
-        }
+        val button = ::pill
         val buttons = LinearLayout(this).apply { setPadding(0, dp(4), 0, 0) }
         fun add(b: View) = buttons.addView(b, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(8) })
         val open = { link: String -> runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link))) }.onFailure { toast("No browser to open the page in") }; Unit }
@@ -374,6 +387,194 @@ class MainActivity : Activity(), Player.Listener, Account.Watcher {
             addView(card)
         }
     }
+
+    private fun pill(label: String, filled: Boolean, onClick: () -> Unit) = text(label, 14, if (filled) BG else TEXT, bold = true).apply {
+        setPadding(dp(16), dp(9), dp(16), dp(9))
+        background = rounded(if (filled) ACCENT else BG, 18)
+        setOnClickListener { onClick() }
+    }
+
+    // --- The Noctorium account screen, opened from the picture on Home ---
+
+    private fun openAccount() {
+        val screen = AccountScreen()
+        account = screen
+        push(screen.view)
+    }
+
+    /** The listener's round picture, over the initial of their name, which shows until it loads or when there is none. */
+    private fun avatar(sizeDp: Int) = FrameLayout(this).apply {
+        background = rounded(CARD, sizeDp / 2)
+        clipToOutline = true
+        tag = sizeDp
+        addView(text("", sizeDp * 2 / 5, ACCENT, bold = true).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(-1, -1))
+        addView(ImageView(this@MainActivity).apply { scaleType = ImageView.ScaleType.CENTER_CROP }, FrameLayout.LayoutParams(-1, -1))
+        fillAvatar(this)
+    }
+
+    private fun fillAvatar(frame: FrameLayout) {
+        (frame.getChildAt(0) as TextView).text = Account.name.take(1).uppercase().ifEmpty { "?" }
+        val image = frame.getChildAt(1) as ImageView
+        if (image.tag != Account.avatarUrl) Images.into(image, Account.avatarUrl, dp(frame.tag as Int))
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        val uri = data?.data
+        if (requestCode == PICK_PICTURE && resultCode == RESULT_OK && uri != null) account?.upload(uri)
+    }
+
+    /** The picture at [uri] as the 256-pixel square JPEG the account service keeps, cropped from its middle. */
+    // shortcut: a photo's EXIF rotation is not applied, so a sideways phone photo stays sideways; fix if people hit it.
+    private fun squareJpeg(uri: Uri): ByteArray {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (minOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 256) sample *= 2
+        val full = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
+            ?: throw IOException("That picture could not be opened")
+        val side = minOf(full.width, full.height)
+        val square = Bitmap.createScaledBitmap(Bitmap.createBitmap(full, (full.width - side) / 2, (full.height - side) / 2, side, side), 256, 256, true)
+        return ByteArrayOutputStream().also { square.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
+    }
+
+    /**
+     * Signing in and out, and once signed in what the account page on the service offers: the picture, the name,
+     * the email, the password and deleting, with the password and two-step code a change asks for.
+     */
+    private inner class AccountScreen {
+        val view = FrameLayout(this@MainActivity).apply { setBackgroundColor(BG); isClickable = true }
+        private var shown = ""
+        private var busy = false
+        private var picture: FrameLayout? = null
+        private var who: TextView? = null
+        private var status: TextView? = null
+
+        init { refresh() }
+
+        /** Built again when what it offers changes; otherwise only the picture and name move, keeping what is typed. */
+        fun refresh() {
+            val state = listOf(Account.signedIn, Account.code, Account.message, Account.avatarUrl == null, Account.hasPassword,
+                Account.totp, Account.telegramCodes, Account.discordLinked, Account.telegramLinked).joinToString("|")
+            if (state != shown) {
+                shown = state
+                view.removeAllViews()
+                view.addView(scroll(build()))
+            }
+            picture?.let { fillAvatar(it) }
+            who?.text = listOf(Account.name, Account.email, "${Account.streams} listens").filter { it.isNotEmpty() }.joinToString(" · ")
+        }
+
+        fun upload(uri: Uri) = run("Sending the picture") { done ->
+            background({ squareJpeg(uri) }, { done(it) }) { Account.upload(it, done) }
+        }
+
+        /** One change at a time, its outcome said under the picture. */
+        private fun run(doing: String, work: ((String?) -> Unit) -> Unit) {
+            if (busy) return
+            busy = true
+            status?.apply { text = "$doing…"; setTextColor(MUTED) }
+            work { error ->
+                busy = false
+                status?.apply { text = error ?: "Saved."; setTextColor(if (error == null) MUTED else ERROR) }
+            }
+        }
+
+        private fun build(): View {
+            val column = column()
+            column.addView(text("‹  Noctorium account", 18, TEXT, bold = true).apply {
+                setPadding(dp(16), dp(18), dp(16), dp(10))
+                setOnClickListener { @Suppress("DEPRECATION") onBackPressed() }
+            })
+            picture = null; who = null; status = null
+            if (!Account.signedIn) return column.apply { addView(accountCard()) }
+
+            val head = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(16), 0, dp(16), dp(8))
+            }
+            picture = avatar(96).also { head.addView(it, LinearLayout.LayoutParams(dp(96), dp(96))) }
+            who = text("", 14, MUTED).apply { gravity = Gravity.CENTER; setPadding(0, dp(10), 0, 0) }
+                .also { head.addView(it, LinearLayout.LayoutParams(-1, -2)) }
+            status = text("", 14, MUTED).apply { gravity = Gravity.CENTER; maxLines = 4; setPadding(0, dp(6), 0, 0) }
+                .also { head.addView(it, LinearLayout.LayoutParams(-1, -2)) }
+            column.addView(head)
+
+            val choices = mutableListOf<View>(pill("Choose…", true) {
+                runCatching { startActivityForResult(Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE), PICK_PICTURE) }
+                    .onFailure { toast("No app to choose a picture with") }
+            })
+            if (Account.discordLinked) choices += pill("Discord's", false) { run("Taking Discord's picture") { Account.change("avatar-discord", done = it) } }
+            if (Account.telegramLinked) choices += pill("Telegram's", false) { run("Taking Telegram's picture") { Account.change("avatar-telegram", done = it) } }
+            if (Account.avatarUrl != null) choices += pill("Remove", false) { run("Removing the picture") { Account.change("avatar-remove", done = it) } }
+            column.addView(section("Picture", row(choices)))
+
+            val name = field("Name", Account.name)
+            column.addView(section("Name", name, row(listOf(pill("Save", true) {
+                run("Saving the name") { Account.change("name", mapOf("name" to name.text.toString().trim()), it) }
+            }))))
+
+            // The proofs a change of email or password, or deleting, asks for: the password and the two-step code.
+            val password = field("Your password", type = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
+            val code = field("Two-step code", type = InputType.TYPE_CLASS_NUMBER)
+            fun proofs() = mapOf("password" to password.text.toString(), "code" to code.text.toString().trim())
+            if (Account.hasPassword || Account.totp || Account.telegramCodes) {
+                val rows = mutableListOf<View>(text("Changing the email or password, or deleting the account, asks for these.", 13, MUTED).apply { maxLines = 3 })
+                if (Account.hasPassword) rows += password
+                if (Account.totp || Account.telegramCodes) rows += code
+                if (Account.telegramCodes) rows += row(listOf(pill("Send a code by Telegram", false) { run("Asking Telegram for a code") { Account.telegramCode(it) } }))
+                column.addView(section("Proof", *rows.toTypedArray()))
+            }
+
+            val email = field("Email", Account.email, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS)
+            column.addView(section("Email", email, row(listOf(pill("Change email", true) {
+                run("Changing the email") { Account.change("email", proofs() + ("email" to email.text.toString().trim()), it) }
+            }))))
+
+            val fresh = field("New password", type = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
+            column.addView(section(if (Account.hasPassword) "Password" else "Add a password", fresh, row(listOf(pill("Set password", true) {
+                val proof = mapOf("current" to password.text.toString(), "code" to code.text.toString().trim(), "password" to fresh.text.toString())
+                run("Setting the password") { Account.change("password", proof, it) }
+            }))))
+
+            val confirm = field("Type “delete my account”")
+            val delete = text("Delete", 14, BG, bold = true).apply {
+                setPadding(dp(16), dp(9), dp(16), dp(9))
+                background = rounded(ERROR, 18)
+                setOnClickListener { run("Deleting the account") { Account.change("delete", proofs() + ("confirm" to confirm.text.toString()), it) } }
+            }
+            column.addView(section("Delete the account",
+                text("Everything on the account goes, for good, and every device is signed out.", 13, MUTED).apply { maxLines = 3 },
+                confirm, row(listOf(delete))))
+
+            column.addView(row(listOf(pill("Sign out", false) { Account.signOut() })).apply { setPadding(dp(16), dp(8), dp(16), dp(16)) })
+            return column
+        }
+
+        private fun field(hint: String, value: String = "", type: Int = InputType.TYPE_CLASS_TEXT) = EditText(this@MainActivity).apply {
+            this.hint = hint
+            setText(value)
+            inputType = type
+            setTextColor(TEXT); setHintTextColor(MUTED)
+            background = rounded(BG, 12)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+        }
+
+        private fun row(views: List<View>): View {
+            val line = LinearLayout(this@MainActivity)
+            views.forEach { line.addView(it, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(8) }) }
+            return HorizontalScrollView(this@MainActivity).apply { isHorizontalScrollBarEnabled = false; addView(line) }
+        }
+
+        private fun section(title: String, vararg rows: View): View {
+            val card = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL; background = rounded(CARD, 14); setPadding(dp(16), dp(14), dp(16), dp(14))
+                addView(text(title, 16, TEXT, bold = true))
+                rows.forEach { addView(it, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }) }
+            }
+            return FrameLayout(this@MainActivity).apply { setPadding(dp(16), dp(4), dp(16), dp(8)); addView(card) }
+        }
+    }
+
 
     // --- A playlist ---
 
