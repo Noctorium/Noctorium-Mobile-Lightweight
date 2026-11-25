@@ -22,7 +22,7 @@ val latestReleaseTag: String? = runCatching {
 
 val appVersion: String = (findProperty("appVersion") as String?)?.trim()?.removePrefix("v")?.takeIf { it.isNotBlank() }
     ?: latestReleaseTag?.removePrefix("v")
-    ?: "0.42.1"
+    ?: "0.42.2"
 
 android {
     namespace = "app.noctorium.lite"
