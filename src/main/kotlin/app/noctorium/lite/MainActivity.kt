@@ -217,7 +217,16 @@ class MainActivity : Activity(), Player.Listener, Account.Watcher {
     private fun homeScreen(): View {
         val column = column()
         val top = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), dp(16), 0, dp(4)) }
-        homeAvatar = avatar(40).apply { contentDescription = "Noctorium account"; setOnClickListener { openAccount() } }
+        // The picture opens a choice of the account or its Stats, as in the other apps.
+        homeAvatar = avatar(40).apply {
+            contentDescription = "Noctorium account"
+            setOnClickListener { picture ->
+                PopupMenu(this@MainActivity, picture).apply {
+                    menu.add("Account").setOnMenuItemClickListener { openAccount(); true }
+                    menu.add("Stats").setOnMenuItemClickListener { push(StatsScreen().view); true }
+                }.show()
+            }
+        }
         top.addView(homeAvatar, LinearLayout.LayoutParams(dp(40), dp(40)))
         top.addView(heading("Noctorium").apply { setPadding(dp(12), 0, dp(16), 0) }, LinearLayout.LayoutParams(0, -2, 1f))
         column.addView(top)
@@ -844,5 +853,152 @@ class MainActivity : Activity(), Player.Listener, Account.Watcher {
         setPadding(dp(10), dp(10), dp(10), dp(10))
         layoutParams = LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp))
         setOnClickListener { onClick() }
+    }
+
+    // --- Stats, opened from the picture on Home ---
+
+    /**
+     * Noctorium Stats inside Noctorium: the account's listens from every device, with its streaks and charts, over a
+     * week, a month, three months, a year or all of it. Read as the service sends it, with no model in between.
+     */
+    private inner class StatsScreen {
+        val view = FrameLayout(this@MainActivity).apply { setBackgroundColor(BG); isClickable = true }
+        private val column = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(16), dp(16), dp(24)) }
+        private var range = "30d"
+
+        init {
+            view.addView(scroll(column))
+            show()
+        }
+
+        private fun show() {
+            column.removeAllViews()
+            column.addView(text("Stats", 24, TEXT, bold = true).apply { setPadding(0, 0, 0, dp(10)) })
+            if (!Account.signedIn) {
+                column.addView(text("Your stats come from your Noctorium account: every song played on any device signed in to it, with your streaks and charts. Sign in from your picture's Account.", 14, MUTED))
+                return
+            }
+            val chips = LinearLayout(this@MainActivity)
+            listOf("7d" to "7 days", "30d" to "30 days", "90d" to "90 days", "365d" to "Year", "all" to "All time").forEach { (code, label) ->
+                chips.addView(pill(label, code == range) { if (range != code) { range = code; show() } }, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(8) })
+            }
+            column.addView(HorizontalScrollView(this@MainActivity).apply { isHorizontalScrollBarEnabled = false; addView(chips) })
+            val loading = text("Loading…", 14, MUTED).apply { setPadding(0, dp(12), 0, 0) }
+            column.addView(loading)
+            val asked = range
+            Account.fullStats(asked) { stats ->
+                if (asked != range) return@fullStats
+                column.removeView(loading)
+                if (stats == null) column.addView(text("Your stats could not be reached. Try again in a moment.", 14, MUTED).apply { setPadding(0, dp(12), 0, 0) })
+                else figures(stats)
+            }
+        }
+
+        private fun figures(s: org.json.JSONObject) {
+            val streams = s.optInt("streams")
+            val streak = s.optJSONObject("streak")
+            val minutes = s.optLong("msPlayed") / 60_000
+            fun days(n: Int) = if (n == 1) "1 day" else "$n days"
+            fun plays(n: Int) = if (n == 1) "1 play" else "$n plays"
+            listOf(
+                "Listens" to "$streams",
+                "Listened" to if (minutes < 60) "$minutes min" else "${minutes / 60} h ${minutes % 60} min",
+                "Songs" to "${s.optInt("uniqueTracks")}",
+                "Artists" to "${s.optInt("artists")}",
+                "Current streak" to days(streak?.optInt("current") ?: 0),
+                "Longest streak" to days(streak?.optInt("longest") ?: 0),
+            ).chunked(2).forEach { pair ->
+                val row = LinearLayout(this@MainActivity).apply { setPadding(0, dp(10), 0, 0) }
+                pair.forEachIndexed { i, (label, value) ->
+                    val tile = LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        background = rounded(CARD, 14)
+                        setPadding(dp(14), dp(12), dp(14), dp(12))
+                        addView(text(value, 20, TEXT, bold = true).apply { maxLines = 1 })
+                        addView(text(label, 12, MUTED))
+                    }
+                    row.addView(tile, LinearLayout.LayoutParams(0, -2, 1f).apply { if (i == 0) rightMargin = dp(10) })
+                }
+                column.addView(row)
+            }
+            if (streams == 0) {
+                column.addView(text("Nothing played in this span yet.", 14, MUTED).apply { setPadding(0, dp(12), 0, 0) })
+                return
+            }
+            fun heading(value: String) = column.addView(text(value, 18, TEXT, bold = true).apply { setPadding(0, dp(20), 0, dp(8)) })
+            fun labels(under: List<String>) = column.addView(LinearLayout(this@MainActivity).apply {
+                setPadding(0, dp(4), 0, 0)
+                under.forEach { addView(text(it, 10, MUTED).apply { maxLines = 1 }, LinearLayout.LayoutParams(0, -2, 1f)) }
+            })
+            fun minutesOf(key: String) = s.optJSONArray(key)?.let { a -> List(a.length()) { a.getJSONObject(it).optInt("minutes") } } ?: emptyList()
+            val timeline = s.optJSONObject("timeline")
+            heading(if (timeline?.optString("bucket") == "month") "Month by month" else "Day by day")
+            column.addView(Bars(timeline?.optJSONArray("points")?.let { a -> List(a.length()) { a.getJSONObject(it).optInt("minutes") } } ?: emptyList()), LinearLayout.LayoutParams(-1, dp(110)))
+            heading("Hour of the day")
+            column.addView(Bars(minutesOf("hourly")), LinearLayout.LayoutParams(-1, dp(80)))
+            labels(List(24) { if (it % 6 == 0) "$it" else "" })
+            heading("Day of the week")
+            column.addView(Bars(minutesOf("weekdays")), LinearLayout.LayoutParams(-1, dp(80)))
+            labels(listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"))
+            fun line(rank: Int?, title: String, under: String, end: String) {
+                val row = LinearLayout(this@MainActivity).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(5), 0, dp(5)) }
+                if (rank != null) row.addView(text("$rank", 13, MUTED), LinearLayout.LayoutParams(dp(26), -2))
+                row.addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(text(title, 14, TEXT).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END })
+                    addView(text(under, 12, MUTED).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END })
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+                row.addView(text(end, 12, MUTED))
+                column.addView(row)
+            }
+            heading("Top songs")
+            s.optJSONArray("topTracks")?.let { a -> for (i in 0 until a.length()) a.getJSONObject(i).let { line(i + 1, it.optString("title"), it.optString("artist"), plays(it.optInt("streams"))) } }
+            heading("Top artists")
+            s.optJSONArray("topArtists")?.let { a ->
+                for (i in 0 until a.length()) a.getJSONObject(i).let {
+                    val songs = it.optInt("tracks")
+                    line(i + 1, it.optString("artist"), "$songs ${if (songs == 1) "song" else "songs"} · ${it.optInt("minutes")} min", plays(it.optInt("streams")))
+                }
+            }
+            heading("By service")
+            val services = linkedMapOf<String, Int>()
+            s.optJSONArray("byProvider")?.let { a -> for (i in 0 until a.length()) a.getJSONObject(i).let { services.merge(serviceName(it.optString("provider")), it.optInt("streams"), Int::plus) } }
+            services.entries.sortedByDescending { it.value }.forEach { (name, count) -> line(null, name, "", "${count * 100 / streams}%") }
+            val recent = s.optJSONArray("recent")
+            if (recent != null && recent.length() > 0) heading("Recently played")
+            val at = java.text.SimpleDateFormat("d MMM, HH:mm", java.util.Locale.getDefault())
+            for (i in 0 until (recent?.length() ?: 0)) recent!!.getJSONObject(i).let {
+                val time = runCatching {
+                    at.format(java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSX", java.util.Locale.ROOT).parse(it.optString("playedAt"))!!)
+                }.getOrDefault("")
+                line(null, it.optString("title"), "${it.optString("artist")} · ${serviceName(it.optString("provider"))}", time)
+            }
+        }
+
+        private fun serviceName(code: String) = when (code) {
+            "YOUTUBE_MUSIC", "YOUTUBE_VIDEO" -> "YouTube Music"
+            "SOUNDCLOUD" -> "SoundCloud"
+            "SPOTIFY" -> "Spotify"
+            "BANDCAMP" -> "Bandcamp"
+            "VK" -> "VK"
+            "LOCAL" -> "Your files"
+            else -> code.lowercase().replace('_', ' ').replaceFirstChar(Char::uppercase)
+        }
+    }
+
+    /** Bars as tall as their share of the tallest, side by side. */
+    private inner class Bars(private val values: List<Int>) : View(this@MainActivity) {
+        private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = ACCENT }
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            if (values.isEmpty()) return
+            val most = (values.maxOrNull() ?: 0).coerceAtLeast(1).toFloat()
+            val gap = dp(2).toFloat()
+            val each = (width - gap * (values.size - 1)) / values.size
+            values.forEachIndexed { i, value ->
+                val left = i * (each + gap)
+                val tall = (value / most * height).coerceAtLeast(dp(2).toFloat())
+                canvas.drawRoundRect(left, height - tall, left + each, height.toFloat(), dp(2).toFloat(), dp(2).toFloat(), paint)
+            }
+        }
     }
 }

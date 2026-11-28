@@ -159,6 +159,16 @@ object Account : Player.Listener {
      * One change of the profile -- `name`, `email`, `password`, `delete`, `avatar-discord`, `avatar-telegram` or
      * `avatar-remove` -- with its [fields]; [done] gets what went wrong, or null.
      */
+    /**
+     * The account's full statistics over [range] (7d, 30d, 90d, 365d or all), on this phone's clock, handed to [done] on
+     * the main thread: null when signed out or out of reach.
+     */
+    fun fullStats(range: String, done: (JSONObject?) -> Unit) = Thread {
+        val tz = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000
+        val reply = call("/api/stats?range=$range&tz=$tz&limit=10")?.takeIf { it.first in 200..299 }?.second
+        main.post { done(reply) }
+    }.start()
+
     fun change(action: String, fields: Map<String, String> = emptyMap(), done: (String?) -> Unit) {
         val body = JSONObject().put("action", action)
         fields.forEach { (k, v) -> body.put(k, v) }
